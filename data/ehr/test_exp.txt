@@ -1,0 +1,5 @@
+250.41	_associated_with	272.1	0.0011253714285714
+272.1	_treated_with	J02AA01	0.000892
+80061	_performed_for	250.23	0.00057816
+1011F	_performed_for	530.11	0.00056636
+N06AB10	_causes	C0009450	0.111

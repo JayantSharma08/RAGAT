@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # @Time    : 2021/1/25 6:45 PM
 # @Author  : liuxiyang
+from turtle import color
 from helper import *
 from model.message_passing import MessagePassing
 from model.SpecialSpmmFinal import SpecialSpmmFinal
@@ -9,7 +10,7 @@ import torch.nn as nn
 
 class RagatConv(MessagePassing):
     def __init__(self, edge_index, edge_type, in_channels, out_channels, num_rels, act=lambda x: x, params=None,
-                 head_num=1):
+                 head_num=1,nx_g=None):
         super(self.__class__, self).__init__()
 
         self.edge_index = edge_index
@@ -21,6 +22,7 @@ class RagatConv(MessagePassing):
         self.act = act
         self.device = None
         self.head_num = head_num
+        self.nx_g = nx_g
 
         self.w1_loop = get_param((in_channels, out_channels))
         self.w1_in = get_param((in_channels, out_channels))
@@ -105,13 +107,13 @@ class RagatConv(MessagePassing):
             out_res3 = self.propagate('add', self.out_index, x=x, edge_type=self.out_type, rel_embed=rel_embed,
                                       rel_weight=self.rel_weight3, edge_norm=self.out_norm, mode='out', w_str='w3_{}')
         if self.p.att:
-            out1 = self.agg_multi_head(in_res1, out_res1, loop_res1, 1)
+            out1 = self.agg_multi_head(in_res1, out_res1, loop_res1, 1,nx_g=self.nx_g)
             if self.head_num == 2:
-                out2 = self.agg_multi_head(in_res2, out_res2, loop_res2, 2)
+                out2 = self.agg_multi_head(in_res2, out_res2, loop_res2, 2,nx_g=self.nx_g)
                 out = 1 / 2 * (out1 + out2)
             elif self.head_num == 3:
-                out2 = self.agg_multi_head(in_res2, out_res2, loop_res2, 2)
-                out3 = self.agg_multi_head(in_res3, out_res3, loop_res3, 3)
+                out2 = self.agg_multi_head(in_res2, out_res2, loop_res2, 2,nx_g=self.nx_g)
+                out3 = self.agg_multi_head(in_res3, out_res3, loop_res3, 3,nx_g=self.nx_g)
                 out = 1 / 3 * (out1 + out2 + out3)
             else:
                 out = out1
@@ -125,13 +127,19 @@ class RagatConv(MessagePassing):
 
         return entity1, relation1[:-1]
 
-    def agg_multi_head(self, in_res, out_res, loop_res, head_no):
+    def agg_multi_head(self, in_res, out_res, loop_res, head_no,nx_g=None):
         att_weight = getattr(self, 'w_att_head{}'.format(head_no))
         edge_index = torch.cat([self.edge_index, self.loop_index], dim=1)
+        # print(f"Edge idxs size = {edge_index.size()}")
         all_message = torch.cat([in_res, out_res, loop_res], dim=0)
-        powers = -self.leakyrelu(all_message.mm(att_weight).squeeze())
+        # print(f"Attention weights size = {self.w_att_head1.size()}")
+        powers = -self.leakyrelu(all_message.mm(att_weight).squeeze()) #power of each message m(u,r,v)
         # edge_exp: E * 1
         edge_exp = torch.exp(powers).unsqueeze(1)
+        
+        # if nx_g is not None:
+        # self.vis_attention(nx_g, edge_exp)
+
         weight_rowsum = self.special_spmm(
             edge_index, edge_exp, self.p.num_ent, self.p.num_ent, 1, dim=1)
         # except 0
@@ -147,6 +155,134 @@ class RagatConv(MessagePassing):
         emb_agg = emb_agg.div(weight_rowsum)
         assert not torch.isnan(emb_agg).any()
         return emb_agg
+
+    def vis_attention(self, nx_g, edge_exp):
+        jsonFilePath1 = r'data/ent_to_id.json'
+        jsonFilePath2 = r'data/id_to_ent.json'
+        att_to_plot = edge_exp[:(self.edge_index.size(1))//2,:]
+        att_to_plot = torch.flatten(att_to_plot).tolist()
+        # print(f"Required weights size = {len(att_to_plot)}")
+        # pos = nx.spring_layout(nx_g,seed=100)
+        # fig, ax = plt.subplots()
+        # edge_list_t, att, node_list,labels = self.plot_preds(jsonFilePath1, jsonFilePath2,att_to_plot)
+        self.plot_preds(nx_g,jsonFilePath1, jsonFilePath2,att_to_plot)
+
+        # print(f"Len of nodelist = {len(node_list)}")
+        # print(f"Starting elements of edge idxs = {edge_list[:10]}") #real eg. [(0, 1), (2, 3)]
+        # plot_graph(nx_g, att_to_plot[:1000],ax,nodes_pos=pos, nodes_to_plot=node_list,
+        #                         edges_to_plot=edge_list)
+
+        # cmap = plt.cm.plasma
+        # nodes = nx.draw_networkx_nodes(nx_g, pos, node_size=10, node_color="indigo",
+        #                                 nodelist=node_list,alpha=0.9,ax=ax)
+        # edges = nx.draw_networkx_edges(nx_g,pos,arrowstyle="->",edgelist=edge_list_t,
+        #                                 arrowsize=5,edge_color=att,
+        #                                 edge_cmap=cmap,width=2, alpha=0.5,ax=ax)
+        # nx.draw_networkx_labels(nx_g,pos,labels=labels,font_size=6)
+        
+        # pc = mpl.collections.PatchCollection(edges, cmap=cmap)
+        # pc.set_array(att)
+        # cbar = plt.colorbar(pc)
+        # cbar.set_label('Attention', labelpad=5)
+
+        # ax = plt.gca()
+        # plt.show()
+
+        # sm = plt.cm.ScalarMappable(cmap=plt.cm.Reds, norm=plt.Normalize(vmin=0, vmax=1))
+        # sm.set_array([])
+        # plt.colorbar(sm, fraction=0.046, pad=0.01)
+
+        # ax.set_axis_off()
+        # plt.savefig('plots/graph.png')
+
+    def plot_preds(self, nx_g,jsonFilePath1, jsonFilePath2,att_to_plot):
+        nodes_wanted = ['N05BA12']
+        # nodes_wanted = ['401.2']
+        idxs = []
+        with open(jsonFilePath1) as ent_file:
+            data = json.load(ent_file)
+            idxs = [data[i.lower()] for i in nodes_wanted]
+            print(f"The req ids are = {idxs}")
+        # edge_list = self.in_index[:,:100]
+        edge_list = self.in_index.tolist()
+        # edge_list_t = []
+        att = []
+        wt_edges = []
+        for i in idxs:
+            for j in range(len(edge_list[0])):
+                if i == edge_list[0][j] or i == edge_list[1][j]:
+                    # edge_list_t.append((edge_list[0][j],edge_list[1][j]))
+                    att.append(att_to_plot[j])
+                    nx_g.add_edge(edge_list[0][j],edge_list[1][j],color=att_to_plot[j])
+                    # wt_edges.append((edge_list[0][j],edge_list[0][j],att_to_plot[j]))
+
+        # for j in range(len(edge_list[0])):
+        #     wt_edges.append((edge_list[0][j],edge_list[1][j],att_to_plot[j]))
+        
+        # nx_g.add_weighted_edges_from(wt_edges)
+        idxs_n = [n for n in nx_g[idxs[0]]] #to get neighbours
+        print(f"Neighbour idxs = {idxs_n}")
+        # print(nx_g.edges())
+        wt_edges_n = []
+        pred_obj = 550
+        for i in idxs_n:
+            for j in range(len(edge_list[0])):
+                if (i == edge_list[0][j] and pred_obj == edge_list[1][j]) or \
+                        (pred_obj == edge_list[0][j] and i == edge_list[1][j]):
+                    # edge_list_t.append((edge_list[0][j],edge_list[1][j]))
+                    att.append(att_to_plot[j])
+                    nx_g.add_edge(edge_list[0][j],edge_list[1][j],color=att_to_plot[j])
+                    # wt_edges_n.append((edge_list[0][j],edge_list[1][j],att_to_plot[j]))
+        # nx_g.add_weighted_edges_from(wt_edges_n)
+        # # edge_list_tuple = [i for i in zip(edge_list[0],edge_list[1])] #to make [(u,v),(w,x)] original edge list
+        # node_list = list(set.union(*map(set,edge_list_t)))
+        labels = {}
+        with open(jsonFilePath2) as id_file:
+            data = json.load(id_file)
+            # for i in node_list:
+            #     labels[i] = data[str(i)].upper()
+            for i in nx_g.nodes():
+                labels[i] = data[str(i)].upper()
+                nx_g.nodes[i]['label'] = data[str(i)].upper()
+            # print(f"The req labels are = {labels}")
+        
+        # print(f"The edge list = {edge_list_t}")
+        # print(f"The att list = {att}")
+        # print(f"The node list = {node_list}")
+        
+        # fig, ax = plt.subplots()
+        # nx_g.add_edge(1037,550,color=0.9)
+        # att.append(0.9)
+        pos = nx.spring_layout(nx_g,seed=100)
+        # cmap = plt.cm.plasma
+        # nodes = nx.draw_networkx_nodes(nx_g, pos, node_size=10, node_color="indigo",
+        #                                 nodelist=nx_g.nodes(),alpha=0.9,ax=ax)
+        # edges = nx.draw_networkx_edges(nx_g,pos,arrowstyle="->",
+        #                                 arrowsize=5,edgelist=nx_g.edges(),
+        #                                 edge_cmap=cmap,width=2, alpha=0.5,ax=ax)
+        # # nx.draw_networkx_labels(nx_g,pos,labels=labels,font_size=6)
+        
+        # pc = mpl.collections.PatchCollection(edges, cmap=cmap)
+        # pc.set_array(att_to_plot)
+        # cbar = plt.colorbar(pc)
+        # cbar.set_label('Attention', labelpad=5)
+        # ax.set_axis_off()
+        options = {
+        "node_color": "#A0CBE2",
+        "edge_color": att,
+        "width": 4,
+        "edge_cmap": plt.cm.Blues,
+        }
+        # print(f"Att values = {att}")
+        nx.draw(nx_g, pos, **options)
+        nx.draw_networkx_labels(nx_g,pos,labels=labels,font_size=6)
+
+        plt.savefig('plots/graph.png')
+
+        nt = Network(height='750px', width='100%')
+        nt.from_nx(nx_g)
+        nt.show('nt.html')
+        # return edge_list_t,att,node_list,labels
 
     def rel_transform(self, ent_embed, rel_embed, rel_weight, opn=None):
         if opn is None:

@@ -20,7 +20,7 @@ class BaseModel(torch.nn.Module):
 
 
 class RagatBase(BaseModel):
-    def __init__(self, edge_index, edge_type, num_rel, params=None):
+    def __init__(self, edge_index, edge_type, num_rel, params=None,nx_g=None):
         super(RagatBase, self).__init__(params)
 
         self.edge_index = edge_index
@@ -28,6 +28,7 @@ class RagatBase(BaseModel):
         self.p.gcn_dim = self.p.embed_dim if self.p.gcn_layer == 1 else self.p.gcn_dim
         self.init_embed = get_param((self.p.num_ent, self.p.init_dim))
         self.device = self.edge_index.device
+        self.nx_g=nx_g
 
         if self.p.score_func == 'transe':
             self.init_rel = get_param((num_rel, self.p.init_dim))
@@ -35,9 +36,9 @@ class RagatBase(BaseModel):
             self.init_rel = get_param((num_rel * 2, self.p.init_dim))
 
         self.conv1 = RagatConv(self.edge_index, self.edge_type, self.p.init_dim, self.p.gcn_dim, num_rel,
-                               act=self.act, params=self.p, head_num=self.p.head_num)
+                               act=self.act, params=self.p, head_num=self.p.head_num,nx_g=self.nx_g)
         self.conv2 = RagatConv(self.edge_index, self.edge_type, self.p.gcn_dim, self.p.embed_dim, num_rel,
-                               act=self.act, params=self.p, head_num=1) if self.p.gcn_layer == 2 else None
+                               act=self.act, params=self.p, head_num=1,nx_g=self.nx_g) if self.p.gcn_layer == 2 else None
 
         self.register_parameter('bias', Parameter(torch.zeros(self.p.num_ent)))
         self.special_spmm = SpecialSpmmFinal()
@@ -154,8 +155,8 @@ class RagatConvE(RagatBase):
 
 
 class RagatInteractE(RagatBase):
-    def __init__(self, edge_index, edge_type, params=None):
-        super(self.__class__, self).__init__(edge_index, edge_type, params.num_rel, params)
+    def __init__(self, edge_index, edge_type, params=None,nx_g=None):
+        super(self.__class__, self).__init__(edge_index, edge_type, params.num_rel, params,nx_g)
         # self.ent_embed = torch.nn.Embedding(self.p.num_ent, self.p.embed_dim, padding_idx=None)
         # xavier_normal_(self.ent_embed.weight)
         # self.rel_embed = torch.nn.Embedding(self.p.num_rel * 2, self.p.embed_dim, padding_idx=None)
@@ -221,6 +222,7 @@ class RagatInteractE(RagatBase):
             x += self.bias[neg_ents]
 
         pred = torch.sigmoid(x)
+        # pred = torch.softmax
 
         return pred
 

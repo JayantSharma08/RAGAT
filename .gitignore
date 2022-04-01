@@ -517,3 +517,17 @@ dmypy.json
 cython_debug/
 
 /.idea/
+log/
+plots/
+.gitignore
+predicted_triples.csv
+predicted_triples2.csv
+preds_interpreted.txt
+process_predictions.py
+ragat_trials.db
+ragat.db
+.vscode/launch.json
+sorted_preds.csv
+vars2.npy
+vars_for_plot.npy
+checkpoints/
