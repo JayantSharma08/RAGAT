@@ -136,6 +136,7 @@ class RagatConv(MessagePassing):
         powers = -self.leakyrelu(all_message.mm(att_weight).squeeze()) #power of each message m(u,r,v)
         # edge_exp: E * 1
         edge_exp = torch.exp(powers).unsqueeze(1)
+
         
         # if nx_g is not None:
         # self.vis_attention(nx_g, edge_exp)
@@ -157,15 +158,26 @@ class RagatConv(MessagePassing):
         return emb_agg
 
     def vis_attention(self, nx_g, edge_exp):
-        jsonFilePath1 = r'data/ent_to_id.json'
-        jsonFilePath2 = r'data/id_to_ent.json'
+        jsonFilePath1 = r'data/conversion_dicts/ent_to_id_ext.json'
+        jsonFilePath2 = r'data/conversion_dicts/id_to_ent_ext.json'
+
+        df_path_atc = '/home/jsharma/ragat/RAGAT/data/conversion_dicts/220214_atc-meaning.csv'
+        df_atc = pd.read_csv(df_path_atc,dtype={"code":"string","meaning":"string"})
+        df_path_diag = '/home/jsharma/ragat/RAGAT/data/conversion_dicts/220214_phewas-category-map.csv'
+        df_diag = pd.read_csv(df_path_diag,dtype={"icd":"string","phecode":"string",
+                                                    "phenotype":"string","categories":"string"})
+        df_path_se = '/home/jsharma/ragat/RAGAT/data/conversion_dicts/atc_se.csv'
+        df_se = pd.read_csv(df_path_se,dtype={"atc":"string","UMLS":"string","se_name":"string"})
+
         att_to_plot = edge_exp[:(self.edge_index.size(1))//2,:]
+        # rel_types = self.edge_type[:(self.edge_index.size(1))//2]
         att_to_plot = torch.flatten(att_to_plot).tolist()
+        # rel_dict = {0: '_treated_with', 1: '_causes', 2: '_performed_for', 3: '_associated_with'}
         # print(f"Required weights size = {len(att_to_plot)}")
         # pos = nx.spring_layout(nx_g,seed=100)
         # fig, ax = plt.subplots()
         # edge_list_t, att, node_list,labels = self.plot_preds(jsonFilePath1, jsonFilePath2,att_to_plot)
-        self.plot_preds(nx_g,jsonFilePath1, jsonFilePath2,att_to_plot)
+        self.plot_preds(nx_g,jsonFilePath1, jsonFilePath2,att_to_plot,df_atc,df_diag,df_se)
 
         # print(f"Len of nodelist = {len(node_list)}")
         # print(f"Starting elements of edge idxs = {edge_list[:10]}") #real eg. [(0, 1), (2, 3)]
@@ -195,25 +207,41 @@ class RagatConv(MessagePassing):
         # ax.set_axis_off()
         # plt.savefig('plots/graph.png')
 
-    def plot_preds(self, nx_g,jsonFilePath1, jsonFilePath2,att_to_plot):
-        nodes_wanted = ['N05BA12']
+    def plot_preds(self, nx_g,jsonFilePath1, jsonFilePath2,att_to_plot,df_atc,df_diag,df_se):
+        # nodes_wanted = ['N05BA12']
+        nodes_wanted = ['296.1']
+        nodes_pred = ['N06AX05']
         # nodes_wanted = ['401.2']
         idxs = []
         with open(jsonFilePath1) as ent_file:
             data = json.load(ent_file)
             idxs = [data[i.lower()] for i in nodes_wanted]
-            print(f"The req ids are = {idxs}")
+            idxs_pred = data[nodes_pred[0].lower()]
+            # print(f"The req ids are = {idxs}")
+            # print(f"The pred ids are = {idxs_pred}")
+
         # edge_list = self.in_index[:,:100]
         edge_list = self.in_index.tolist()
+        edge_type = self.in_type.tolist()
         # edge_list_t = []
         att = []
         wt_edges = []
+        rels = []
+        counter = 0
         for i in idxs:
             for j in range(len(edge_list[0])):
                 if i == edge_list[0][j] or i == edge_list[1][j]:
                     # edge_list_t.append((edge_list[0][j],edge_list[1][j]))
-                    att.append(att_to_plot[j])
-                    nx_g.add_edge(edge_list[0][j],edge_list[1][j],color=att_to_plot[j])
+                    counter = counter+1
+                    sub = edge_list[0][j]
+                    obj = edge_list[1][j]
+                    # print(f"Edge between {sub} and {obj} at count = {counter}")
+                    sub_type, obj_type = self.node_type(edge_type, j)
+                    nx_g.add_node(sub,type=sub_type)
+                    nx_g.add_node(obj,type=obj_type)
+                    if nx_g.number_of_edges(sub,obj) == 0:
+                        att.append(att_to_plot[j])
+                    nx_g.add_edge(sub,obj,color=att_to_plot[j],relation=edge_type[j])
                     # wt_edges.append((edge_list[0][j],edge_list[0][j],att_to_plot[j]))
 
         # for j in range(len(edge_list[0])):
@@ -221,29 +249,37 @@ class RagatConv(MessagePassing):
         
         # nx_g.add_weighted_edges_from(wt_edges)
         idxs_n = [n for n in nx_g[idxs[0]]] #to get neighbours
-        print(f"Neighbour idxs = {idxs_n}")
+        # print(f"Neighbour idxs = {idxs_n}")
         # print(nx_g.edges())
         wt_edges_n = []
-        pred_obj = 550
+        # pred_obj = 550
+        pred_obj = idxs_pred
+
         for i in idxs_n:
             for j in range(len(edge_list[0])):
                 if (i == edge_list[0][j] and pred_obj == edge_list[1][j]) or \
-                        (pred_obj == edge_list[0][j] and i == edge_list[1][j]):
+                        (pred_obj == edge_list[0][j] and i == edge_list[1][j]): #edge b/w node's neigh & pred node
                     # edge_list_t.append((edge_list[0][j],edge_list[1][j]))
-                    att.append(att_to_plot[j])
-                    nx_g.add_edge(edge_list[0][j],edge_list[1][j],color=att_to_plot[j])
+                    # rels.append(edge_type[j])
+                    sub = edge_list[0][j]
+                    obj = edge_list[1][j]
+                    sub_type, obj_type = self.node_type(edge_type, j)
+                    nx_g.add_node(sub,type=sub_type)
+                    nx_g.add_node(obj,type=obj_type)
+                    if nx_g.number_of_edges(sub,obj) == 0:
+                        att.append(att_to_plot[j])
+                    nx_g.add_edge(sub,obj,color=att_to_plot[j],relation=edge_type[j])
                     # wt_edges_n.append((edge_list[0][j],edge_list[1][j],att_to_plot[j]))
         # nx_g.add_weighted_edges_from(wt_edges_n)
         # # edge_list_tuple = [i for i in zip(edge_list[0],edge_list[1])] #to make [(u,v),(w,x)] original edge list
         # node_list = list(set.union(*map(set,edge_list_t)))
         labels = {}
+        named_labels = {}
         with open(jsonFilePath2) as id_file:
             data = json.load(id_file)
             # for i in node_list:
             #     labels[i] = data[str(i)].upper()
-            for i in nx_g.nodes():
-                labels[i] = data[str(i)].upper()
-                nx_g.nodes[i]['label'] = data[str(i)].upper()
+            self.assign_labels(nx_g, df_atc, df_diag, data, labels, named_labels)
             # print(f"The req labels are = {labels}")
         
         # print(f"The edge list = {edge_list_t}")
@@ -267,21 +303,88 @@ class RagatConv(MessagePassing):
         # cbar = plt.colorbar(pc)
         # cbar.set_label('Attention', labelpad=5)
         # ax.set_axis_off()
+        print(f"Att values = {len(att)}")
+        print(f"No. of edges = {nx_g.number_of_edges()}")
+        cmap = plt.cm.Blues
+        vmin = min(att)
+        vmax = max(att)
         options = {
         "node_color": "#A0CBE2",
         "edge_color": att,
         "width": 4,
-        "edge_cmap": plt.cm.Blues,
+        "edge_cmap": cmap,
         }
-        # print(f"Att values = {att}")
-        nx.draw(nx_g, pos, **options)
-        nx.draw_networkx_labels(nx_g,pos,labels=labels,font_size=6)
+        
+        plt.figure(figsize=(15,8))
+        # nx.draw(nx_g, pos, node_size=60,**options)
+        nx.draw(nx_g, pos,**options)
+        nx.draw_networkx_labels(nx_g,pos,labels=named_labels,font_size=11)
+        # nx.draw_networkx_labels(nx_g,pos,labels=named_labels)
+                       
 
-        plt.savefig('plots/graph.png')
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin = vmin, vmax=vmax))
+        sm._A = []
+        cbar = plt.colorbar(sm,shrink=0.5,pad=0.1)
+        cbar.set_label('Attention', labelpad=5)
 
-        nt = Network(height='750px', width='100%')
-        nt.from_nx(nx_g)
-        nt.show('nt.html')
+        plt.axis('off')
+        plt.savefig('plots/graph_cmap_ext.png')
+
+    def assign_labels(self, nx_g, df_atc, df_diag, data, labels, named_labels):
+        for i in nx_g.nodes():
+            labels[i] = data[str(i)].upper()
+            if nx_g.nodes[i]['type'] == 'di':
+                if labels[i] == "1010.7":
+                    named_labels[i] = "Health hazards related to socioeconomic & other factors"
+                elif labels[i] == "300.12":
+                    named_labels[i] = "Agorophobia"
+                elif labels[i] == "1090":
+                    named_labels[i] = "Organs absence"
+                elif labels[i] == "296.22":
+                    named_labels[i] = "Depression"
+                elif labels[i] == "316":
+                    named_labels[i] = "Substance addiction"
+                else:
+                    named_labels[i] = df_diag[df_diag['phecode']==labels[i]]['phenotype'].values[0]
+            elif nx_g.nodes[i]['type'] == 'dr':
+                drug_4thlevel = labels[i][:5]
+                if labels[i] == "N06AX05":
+                    named_labels[i] = "Trazodone"
+                else:
+                    named_labels[i] = df_atc[df_atc['code']==drug_4thlevel]['meaning'].values[0]
+            else:
+                if labels[i] == "84443":
+                    named_labels[i] = "Proc84443" 
+                else:
+                    named_labels[i] = "Procedure " + labels[i]
+                # if labels[i][0].isdigit():
+
+            nx_g.nodes[i]['label'] = data[str(i)].upper()
+
+    def node_type(self, edge_type, j):
+        if edge_type[j] == 0:
+            sub_type = 'di'
+            obj_type = 'di'
+        elif edge_type[j] == 1:
+            sub_type = 'di'
+            obj_type = 'dr'
+        elif edge_type[j] == 2:
+            sub_type = 'dr'
+            obj_type = 'dr'
+        elif edge_type[j] == 3:
+            sub_type = 'pro'
+            obj_type = 'di'
+        elif edge_type[j] == 4:
+            sub_type = 'dr'
+            obj_type = 'se'
+        elif edge_type[j] == 5:
+            sub_type = 'di'
+            obj_type = 'di'
+        return sub_type, obj_type
+
+        # nt = Network(height='750px', width='100%')
+        # nt.from_nx(nx_g)
+        # nt.write_html('nt.html')
         # return edge_list_t,att,node_list,labels
 
     def rel_transform(self, ent_embed, rel_embed, rel_weight, opn=None):

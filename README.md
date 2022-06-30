@@ -32,9 +32,13 @@ interacte -opn cross -gpu 0 -data WN18RR -gcn_drop 0.4 -ifeat_drop 0.2
 # EHR
 #pretrained
 python run.py -epoch 1 -name ehr_ragat_17_03_2022_12:29:23 -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.4 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 256 -iker_sz 11 -iperm 4 -attention True -head_num 1 -restore
+python run.py -epoch 1 -name extended_ehr_29_06_2022_07:15:16 -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.2 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 128 -iker_sz 11 -iperm 4 -attention True -head_num 1 -lbl_smooth 0.125 -lr 0.0005 -restore
 #Training with Hyperparamter Optimization using Optuna
+python run.py -epoch 800 -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.4 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 256 -iker_sz 11 -iperm 4 -attention True -head_num 1
+python run.py -epoch 5 -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.4 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 256 -iker_sz 11 -iperm 4 -attention True -head_num 1
+python run.py -epoch 800 -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.2 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 128 -iker_sz 11 -iperm 4 -attention True -head_num 1 -lbl_smooth 0.125 -lr 0.0005
+python run.py -epoch 1000 -name extended_ehr -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.2 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 128 -iker_sz 11 -iperm 4 -attention True -head_num 1 -lbl_smooth 0.125 -lr 0.0005
 
-python run.py -epoch 1500 -model ragat -score_func interacte -opn cross -gpu 0 -gcn_drop 0.4 -ifeat_drop 0.2 -ihid_drop 0.3 -batch 256 -iker_sz 11 -iperm 4 -attention True -head_num 1
 ```
 
 ## Acknowledgement

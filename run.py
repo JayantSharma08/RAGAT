@@ -12,7 +12,6 @@ from model.models import *
 import traceback
 import torch.optim as optim
 from sklearn import metrics
-import pandas as pd
 
 
 class Runner(object):
@@ -41,6 +40,7 @@ class Runner(object):
         """
         ent_set, rel_set = OrderedSet(), OrderedSet()
         for split in ['train', 'test', 'valid']:
+            # for line in open('./data/extended_triples/{}_ext.txt'.format(split)):
             for line in open('./data/ehr/{}_new.txt'.format(split)):
                 sub, rel, obj,freq = map(str.lower, line.strip().split('\t'))
                 ent_set.add(sub)
@@ -53,21 +53,20 @@ class Runner(object):
 
         self.id2ent = {idx: ent for ent, idx in self.ent2id.items()}
         self.id2rel = {idx: rel for rel, idx in self.rel2id.items()}
-
         self.p.num_ent = len(self.ent2id)
         self.p.num_rel = len(self.rel2id) // 2
         # embed_dim is the Embedding dimension to give as input to score function
         self.p.embed_dim = self.p.k_w * self.p.k_h if self.p.embed_dim is None else self.p.embed_dim
 
-        # jsonFilePath1 = r'data/ent_to_id_exp.json'
-        # jsonFilePath2 = r'data/id_to_ent_exp.json'
+        # jsonFilePath1 = r'data/conversion_dicts/ent_to_id_ext.json'
+        # jsonFilePath2 = r'data/conversion_dicts/id_to_ent_ext.json'
 
         # with open(jsonFilePath1, 'w', encoding='utf-8') as jsonf:
         #     jsonf.write(json.dumps(self.ent2id, indent=2))
         
         # with open(jsonFilePath2, 'w', encoding='utf-8') as jsonf:
         #     jsonf.write(json.dumps(self.id2ent, indent=2))
-        # print("done")
+        # print("Done creating .json files")
 
         
         self.data = ddict(list)
@@ -126,8 +125,9 @@ class Runner(object):
 
         def get_data_loader(dataset_class, split, batch_size, shuffle=True):
             # if split=='train':
-            #     batch_size = trial.suggest_int("batch_size", 128, 1024)
-            #     self.logger.debug(f"Trying with {batch_size} batch size")
+            #     batch_size = trial.suggest_int("batch_size", 56, 1024)
+            #     # batch_size = trial.suggest_int("batch_size", 56, 2048)
+            # self.logger.debug(f"Trying with {batch_size} batch size")
 
             return DataLoader(
                 dataset_class(self.triples[split], self.p),
@@ -188,6 +188,20 @@ class Runner(object):
 
 # for optuna:
     def objective(self,trial):
+        # self.p.lr = trial.suggest_loguniform("lr", 1e-5, 1e-1)
+        # self.p.batch_size = trial.suggest_int("batch_size", 56, 1024)
+        # # self.p.head_num = trial.suggest_int("head_num", 1, 3)
+        # self.p.lbl_smooth = trial.suggest_loguniform("lbl_smooth",4e-2,4e-1)
+        # self.p.l2 = trial.suggest_loguniform("l2", 1e-20, 1e-1)
+        # self.p.dropout = trial.suggest_uniform("dropout",0.0,0.5)
+        # self.p.hid_drop = trial.suggest_uniform("hid_drop",0.0,0.5)
+
+        print(f"Trial params: lr={self.p.lr},bs = {self.p.batch_size}, drop={self.p.dropout}\
+        ls={self.p.lbl_smooth},l2={self.p.l2}, hid_drop={self.p.hid_drop}")
+        # self.p.init_dim = trial.suggest_int("init_dim", 50, 200)
+        # self.p.embed_dim = trial.suggest_int("embed_dim", 100, 300)
+
+        
         self.load_data(trial)
         self.model = self.add_model(self.p.model, self.p.score_func)
         self.optimizer = self.add_optimizer(self.model.parameters(),trial)
@@ -202,11 +216,15 @@ class Runner(object):
                 self.logger.info('Successfully Loaded previous model')
             val_results = {}
             val_results['mrr'] = 0
+            last_val_loss = 100 #for early stopping
+            patience = 8
+            trigger_times = 0
             self.logger.info(f"Beginning of trial {trial.number}")
             for epoch in range(self.p.max_epochs):
                 train_loss = self.run_epoch(epoch, val_mrr) #training
-                val_results = self.evaluate('valid', epoch) #validation
-                
+                val_results,val_loss = self.evaluate('valid', epoch) #validation
+                print('The Current validation Loss:', val_loss)
+
                 if val_results['mrr'] > self.best_val_mrr:
                     self.best_val = val_results
                     self.best_val_mrr = val_results['mrr']
@@ -214,22 +232,52 @@ class Runner(object):
                     self.save_model(save_path)
                 
                 # Report the best mrr on validation dataset
-                trial.report(self.best_val_mrr,epoch)
-                if trial.should_prune():
-                    self.logger.warning(f"Trial {trial.number} is going to be pruned")
-                    raise optuna.exceptions.TrialPruned()
+                trial.report(round(self.best_val_mrr,4),epoch)
+                # if trial.should_prune():
+                #     self.logger.warning(f"Trial {trial.number} is going to be pruned")
+                #     raise optuna.exceptions.TrialPruned()
 
                 self.logger.info(
                     '[Epoch {}]: Training Loss: {:.5}, Best valid MRR: {:.5}\n\n'.format(epoch, train_loss,
-                                                                                            self.best_val_mrr))
+                                                                                           self.best_val_mrr))
+                if val_loss > last_val_loss: #early stopping
+                    trigger_times += 1
+                    print('Trigger Times:', trigger_times)
+                    if trigger_times >= patience:
+                        print('Early stopping!\nStart to test process.')
+                        break
+                # if val_results['mrr'] < self.best_val_mrr: #early stopping based on mrr
+                #     trigger_times += 1
+                #     print('Trigger Times:', trigger_times)
+                #     if trigger_times >= patience:
+                #         print('Early stopping!\nStart to test process.')
+                #         break
+                else:
+                    print('trigger times: 0')
+                    trigger_times = 0
+
+                last_val_loss = val_loss
+            # self.explain_ragat()
             self.logger.info('Loading best model, Evaluating on Test data')
             self.load_model(save_path)
-            test_results = self.evaluate('test', self.best_epoch) #testing
+            test_results,_ = self.evaluate('test', self.best_epoch) #testing
             return self.best_val_mrr
         except Exception as e:
             self.logger.debug("%s____%s\n"
                               "traceback.format_exc():____%s" % (Exception, e, traceback.format_exc()))
-        # model.fit(trial)
+
+    # def explain_ragat(self):
+    #     explainer = GNNExplainer(self.model, epochs=self.p.max_epochs, return_type='prob')
+    #     node_idx = 1037
+    #     train_iter = iter(self.data_iter['train'])
+
+    #     for step, batch in enumerate(train_iter):
+    #         self.optimizer.zero_grad()
+    #         sub, rel, obj, label, neg_ent, sub_samp = self.read_batch(batch, 'train')
+    #         node_feat_mask, edge_mask = explainer.explain_node(node_idx, sub, self.edge_index)
+    #         ax, G = explainer.visualize_subgraph(node_idx, self.edge_index, edge_mask, y=label)
+    #         plt.savefig('plots/rgat_explained.png')
+    #     # model.fit(trial)
 
     def __init__(self, params):
         """
@@ -260,28 +308,13 @@ class Runner(object):
         study = optuna.create_study(direction="maximize")
         # uncomment for HPO using Optuna
         # study = optuna.create_study(storage="sqlite:///ragat_trials.db",
-        #             study_name="batch_lr_rel",direction="maximize",load_if_exists=True)
-        # study = optuna.load_study(study_name="batch_lr_hpo", storage="sqlite:///ragat_trials.db")
+        #             study_name="hpos_lblldh_p_rev",direction="maximize",load_if_exists=True,
+        #             pruner=optuna.pruners.MedianPruner(n_startup_trials=100))
+        # study = optuna.load_study(study_name="hpos_lblldh", storage="sqlite:///ragat_trials.db")
         study.optimize(self.objective, n_trials=1)
-
         # assert len(loaded_study.trials) == len(study.trials)
 
-        # complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
-        # print("  Number of complete trials: ", len(complete_trials))
-        # print("Best trial:")
-        # trial = study.best_trial
-
-        # print("  Value: ", trial.value)
-
-        # print("  Params: ")
-        # for key, value in trial.params.items():
-        #     print("    {}: {}".format(key, value))
-        
-        # fig = optuna.visualization.plot_optimization_history(study)
-        # fig2 = optuna.visualization.plot_contour(study, params=["batch_size", "lr"])
-        # fig.write_image("study_history.png")
-        # fig2.write_image("study_contour.png")
-
+        # self.plot_hpo_study(study)
         
 
     def add_model(self, model, score_func):
@@ -327,8 +360,7 @@ class Runner(object):
 
         """
         # optimizer_name = trial.suggest_categorical("optimizer", ["Adam", "RMSprop", "SGD"])
-        # lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
-        # self.logger.debug(f"Trying with {lr} learning rate")
+        # self.logger.debug(f"Trying with {self.p.lr} learning rate")
         # return getattr(optim, optimizer_name)(parameters, lr=self.p.lr, weight_decay=self.p.l2)
         return torch.optim.Adam(parameters, lr=self.p.lr, weight_decay=self.p.l2)
 
@@ -420,10 +452,10 @@ class Runner(object):
             results['hits@k']:      Probability of getting the correct preodiction in top-k ranks based on predicted score
 
         """
-        left_results = self.predict(split=split, mode='tail_batch')
-        right_results = self.predict(split=split, mode='head_batch')
-        # if split == 'test':
-        #     self.classification_metrics(left_results)
+        left_results,loss_l = self.predict(split=split, mode='tail_batch')
+        right_results,loss_r = self.predict(split=split, mode='head_batch')
+        if split == 'test':
+            self.classification_metrics(left_results)
             # write n best predictions for each sub,rel to a file
             # self.write_best_preds(left_results,10)
         results = get_combined_results(left_results, right_results)
@@ -447,9 +479,28 @@ class Runner(object):
         rel2 = '\tMR and MRR for {} : {}, {}\n'.format(self.id2rel[1], results['mr_r2'], results['mrr_r2'])
         rel3 = '\tMR and MRR for {} : {}, {}\n'.format(self.id2rel[2], results['mr_r3'], results['mrr_r3'])
         rel4 = '\tMR and MRR for {} : {}, {}\n'.format(self.id2rel[3], results['mr_r4'], results['mrr_r4'])
+        # if self.id2rel[4]:
+        # rel5 = '\tMR and MRR for {} : {}, {}\n'.format(self.id2rel[4], results['mr_r5'], results['mrr_r5'])
+        # rel6 = '\tMR and MRR for {} : {}, {}\n'.format(self.id2rel[5], results['mr_r6'], results['mrr_r6'])
+
+        # rel1_hits = '\tHit-1,Hit-3 and Hit-10 for {} : {}, {}, {}\n'.format(self.id2rel[0], 
+        #                             results['hits@1_r1'], results['hits@3_r1'],results['hits@10_r1'])
+        # rel2_hits = '\tHit-1,Hit-3 and Hit-10 for {} : {}, {}, {}\n'.format(self.id2rel[1], 
+        #                             results['hits@1_r2'], results['hits@3_r2'],results['hits@10_r2'])
+        # rel3_hits = '\tHit-1,Hit-3 and Hit-10 for {} : {}, {}, {}\n'.format(self.id2rel[2], 
+        #                             results['hits@1_r3'], results['hits@3_r3'],results['hits@10_r3'])
+        # rel4_hits = '\tHit-1,Hit-3 and Hit-10 for {} : {}, {}, {}\n'.format(self.id2rel[3], 
+        #                             results['hits@1_r4'], results['hits@3_r4'],results['hits@10_r4'])                    
+        # rel5_hits = '\tHit-1,Hit-3 and Hit-10 for {} : {}, {}, {}\n'.format(self.id2rel[4], 
+        #                             results['hits@1_r5'], results['hits@3_r5'],results['hits@10_r5'])
+        # rel6_hits = '\tHit-1,Hit-3 and Hit-10 for {} : {}, {}, {}\n'.format(self.id2rel[5], 
+        #                             results['hits@1_r6'], results['hits@3_r6'],results['hits@10_r6'])
 
         log_res = res_mrr + res_mr + res_hit1 + res_hit3 + res_hit10
-        log_rel_wise = rel1 + rel2 + rel3 + rel4
+        # log_rel_wise = rel1 + rel2 + rel3 + rel4 + rel5 + rel6 + \
+        #                     rel1_hits + rel2_hits + rel3_hits + rel4_hits + rel5_hits + rel6_hits
+        log_rel_wise = rel1 + rel2 + rel3 + rel4 
+                                # + rel5 + rel6
         if (epoch + 1) % 10 == 0 or split == 'test':
             self.logger.info(
                 '[Evaluating Epoch {} {}]: {}'.format(epoch, split, log_res))
@@ -458,7 +509,7 @@ class Runner(object):
             self.logger.info(
                 '[Evaluating Epoch {} {}]: {}'.format(epoch, split, res_mrr))
 
-        return results
+        return results, (loss_l + loss_r)/2
 
     def predict(self, split='valid', mode='tail_batch'):
         """
@@ -478,6 +529,7 @@ class Runner(object):
 
         """
         self.model.eval()
+        loss_total = 0
 
         with torch.no_grad():
             results = {}
@@ -487,6 +539,11 @@ class Runner(object):
             for step, batch in enumerate(train_iter):
                 sub, rel, obj, label = self.read_batch(batch, split)
                 pred = self.model.forward(sub, rel)
+                if split == 'valid': #early stopping
+                    val_loss = self.model.loss(pred, label)
+                    loss_total += val_loss.item()
+                    # print(f"Here val loss ={loss_total}")
+                    # print(f"Len of val_iter = {len(train_iter)}")
                 b_range = torch.arange(pred.size()[0], device=self.device)
                 if split == 'test' and mode == 'tail_batch':
                 # if mode == 'tail_batch':
@@ -513,6 +570,7 @@ class Runner(object):
                 # print(f"Rankings = {ranks}")
 
                 if mode == 'tail_batch':
+                    results['ranks'] = torch.cat((ranks,results.get('ranks',empty_tensor)))
                     self.rel_specific(results, rel, ranks)
                 results['count'] = torch.numel(ranks) + results.get('count', 0.0)
                 results['mr'] = torch.sum(ranks).item() + results.get('mr', 0.0)
@@ -524,7 +582,7 @@ class Runner(object):
                 # if step % 100 == 0:
                 #     self.logger.info('[{}, {} Step {}]\t{}'.format(split.title(), mode.title(), step, self.p.name))
 
-        return results
+        return results, loss_total/len(train_iter)
 
     def classification_metrics(self,results):
         labels = torch.flatten(results['all_labels']).cpu().data.numpy()
@@ -533,39 +591,57 @@ class Runner(object):
 
         # 
         # self.metrics_at_k(results,10,-1)
-        # self.metrics_at_k(results, 10, 0)
-        # self.metrics_at_k(results, 10, 1)
-        # self.metrics_at_k(results, 10, 2)
-        # self.metrics_at_k(results, 10, 3)
+        # self.class_metrics_rel(results,0)
+        # self.class_metrics_rel(results,1)
+        # self.class_metrics_rel(results,2)
+        # self.class_metrics_rel(results,3)
+        # self.class_metrics_rel(results,4)
+        # self.class_metrics_rel(results,5)
+
         # 
-        fpr, tpr, thresholds = metrics.roc_curve(labels, preds)
-        # roc_auc = metrics.auc(fpr, tpr)
-        roc_auc = metrics.roc_auc_score(labels, preds)
-        precision,recall,thresholds_pr = metrics.precision_recall_curve(labels, preds)
-        # sorted_idx = np.argsort(precision)
-        auc_pr = metrics.auc(recall,precision)
-        # keeping a threshold of 0.5 to predict a link
-        pred_labels = np.where(preds<=0.50,preds*0,preds/preds)
-        f1_score = metrics.f1_score(labels,pred_labels)
-        confusion_matrix = metrics.confusion_matrix(labels,pred_labels)
+        # fpr, tpr, thresholds = metrics.roc_curve(labels, preds)
+        # # roc_auc = metrics.auc(fpr, tpr)
+        # roc_auc = metrics.roc_auc_score(labels, preds)
+        # precision,recall,thresholds_pr = metrics.precision_recall_curve(labels, preds)
+        # # sorted_idx = np.argsort(precision)
+        # auc_pr = metrics.auc(recall,precision)
+        # # keeping a threshold of 0.5 to predict a link
+        # pred_labels = np.where(preds<=0.50,preds*0,preds/preds)
+        # f1_score = metrics.f1_score(labels,pred_labels)
+        # confusion_matrix = metrics.confusion_matrix(labels,pred_labels)
         # print(f"FPR is ={fpr}")
         # print(f"TPR is = {tpr}")
         # print(f"Thresholds are = {thresholds}")
-        print(f"Roc_auc = {roc_auc}")
-        print(f"AUC_PR = {auc_pr}")
-        print(f"F1 score is = {f1_score}")
-        print(f"Confusion matrix:\n {confusion_matrix}")
-        # for TransE
-        fpr_t,tpr_t,precision_t,recall_t = np.load('vars_for_plot.npy',allow_pickle=True)
-        roc_t, no_skill_t = np.load('vars2.npy',allow_pickle=True)
-        auc_pr_t = metrics.auc(recall_t,precision_t)
+        fpr_r,tpr_r,precision_r,recall_r, roc_r = np.load('vars_to_plot_ragat.npy',allow_pickle=True)
+        auc_pr_r = metrics.auc(recall_r, precision_r)
+        print(f"Roc_auc for RAGAT = {roc_r}")
+        print(f"AUC_PR for RAGAT = {auc_pr_r}")
+        # print(f"F1 score is = {f1_score}")
+        # print(f"Confusion matrix:\n {confusion_matrix}")
+        # np.save('vars_to_plot_ragat.npy', [fpr, tpr, precision, recall, roc_auc])
+        fpr_ext,tpr_ext,precision_ext,recall_ext, roc_ext = np.load('vars_to_plot_ext.npy',allow_pickle=True)
+        auc_pr_ext = metrics.auc(recall_ext, precision_ext)
+        
+        # # for TransE
+        # fpr_t,tpr_t,precision_t,recall_t = np.load('vars_for_plot.npy',allow_pickle=True)
+        # roc_t, no_skill_t = np.load('vars2.npy',allow_pickle=True)
+        # auc_pr_t = metrics.auc(recall_t,precision_t)
+        # # for DistMult
+        # fpr_d,tpr_d,precision_d,recall_d, roc_d = np.load('vars_to_plot_DistMult.npy',allow_pickle=True)
+        # auc_pr_d = metrics.auc(recall_d, precision_d)
+        # # for ComplEx
+        # fpr_c,tpr_c,precision_c,recall_c, roc_c = np.load('vars_to_plot_ComplEx.npy',allow_pickle=True)
+        # auc_pr_c = metrics.auc(recall_c, precision_c)
+        # # To plot
         figure, axes = plt.subplots(1, 2)
         plt1 = axes[0]
         plt2 = axes[1]
         plt1.set_title('Receiver Operating Characteristic')
-        plt1.plot(fpr, tpr  , 'b', label = 'AUC for RAGAT= %0.4f' % roc_auc)
-        plt1.plot(fpr_t, tpr_t , color='lightsteelblue' ,label = 'AUC for TransE= %0.4f' % roc_t)
-        plt1.legend()
+        plt1.plot(fpr_r, tpr_r  , color='wheat', label = 'AUC original KG= %0.4f' % roc_r)
+        plt1.plot(fpr_ext, tpr_ext , color='lavender' ,label = 'AUC Extended KG= %0.4f' % roc_ext)
+        # plt1.plot(fpr_d, tpr_d , color='thistle' ,label = 'AUC with DistMult= %0.4f' % roc_d)
+        # plt1.plot(fpr_c, tpr_c , color='violet' ,label = 'AUC with ComplEx= %0.4f' % roc_c)
+        plt1.legend(loc='best', prop={'size': 8})
         plt1.plot([0, 1], [0, 1],'r--')
         plt1.set_xlim(0, 1)
         plt1.set_ylim(0, 1)
@@ -574,16 +650,19 @@ class Runner(object):
         no_skill = len(labels[labels==1]) / len(labels)
 
         plt2.set_title('Precision Recall curve')
-        plt2.plot([0, 1], [no_skill, no_skill], linestyle='--', color='gray' ,label='No Skill',linewidth=1)
-        plt2.plot(recall, precision, marker='.',color='darkorange' ,label=f'AUCPR RAGAT={round(auc_pr,4)}')
-        plt2.plot(recall_t,precision_t,marker='.', color='bisque' , label=f'AUCPR TransE={round(auc_pr_t,4)}')
+        plt2.plot([0, 1], [no_skill, no_skill], linestyle='--', color='red' ,label='No Skill',linewidth=1)
+        plt2.plot(recall_r, precision_r, marker='.',color='lightblue' ,label=f'AUCPR original KG={round(auc_pr_r,4)}')
+        plt2.plot(recall_ext,precision_ext,marker='.', color='lightgreen' , label=f'AUCPR extended KG={round(auc_pr_ext,4)}')
+        # plt2.plot(recall_d,precision_d,marker='.', color='lightgrey' , label=f'AUCPR with DistMult={round(auc_pr_d,4)}')
+        # plt2.plot(recall_c,precision_c,marker='.', color='gold' , label=f'AUCPR with ComplEx={round(auc_pr_c,4)}')
         # axis labels
         plt2.set_xlabel('Recall')
         plt2.set_ylabel('Precision')
         # show the legend
-        plt2.legend(loc='center left')
+        plt2.legend(loc='center left',prop={'size': 8})
         # show the plot
-        plt.savefig(f"plots/auroc_aucpr.png")
+        figure.tight_layout()
+        plt.savefig(f"plots/auroc_aucpr_ragats.png")
 
     def write_best_preds(self,left_results,n):
         all_subs = left_results['all_subs']
@@ -606,17 +685,18 @@ class Runner(object):
                     score = all_preds[i,t[j]].item()
                     pred_triples.append([subject,relation,obj,score])
         df = pd.DataFrame(pred_triples)
-        df.to_csv(r'predicted_triples2.csv',header=['sub','rel','obj','score'],index=False)
+        df.to_csv(r'predicted_triples_rev.csv',header=['sub','rel','obj','score'],index=False)
 
 
     def rel_specific(self, results, rel, ranks):
-        # print(f"All relations = {rel}")
+        # print(f"All relations = {type(rel)}")
         # print(f"All ranks = {ranks}")
         # below are the indexes of each original relation type
         rel_one = (rel==0).nonzero(as_tuple=True)[0]
         rel_two = (rel==1).nonzero(as_tuple=True)[0]
         rel_three = (rel==2).nonzero(as_tuple=True)[0]
         rel_four = (rel==3).nonzero(as_tuple=True)[0]
+
         # print(f"Relations of type {self.id2rel[2]} have indexes={rel_three}")
         # print(f"Relations of type {self.id2rel[3]} have indexes={rel_four}")
         ranks_r1 = ranks[rel_one]
@@ -640,6 +720,32 @@ class Runner(object):
         results['mrr_r3'] = torch.sum(1.0 / ranks_r3).item() + results.get('mrr_r3', 0.0)
         results['mrr_r4'] = torch.sum(1.0 / ranks_r4).item() + results.get('mrr_r4', 0.0)
 
+        if 4 in rel:
+            rel_five = (rel==4).nonzero(as_tuple=True)[0]
+            rel_six = (rel==5).nonzero(as_tuple=True)[0]
+            ranks_r5 = ranks[rel_five]
+            ranks_r6 = ranks[rel_six]
+            results['count_r5'] = torch.numel(ranks_r5) + results.get('count_r5',0.0)
+            results['count_r6'] = torch.numel(ranks_r6) + results.get('count_r6',0.0)
+            results['mr_r5'] = torch.sum(ranks_r5).item() + results.get('mr_r5', 0.0)
+            results['mr_r6'] = torch.sum(ranks_r6).item() + results.get('mr_r6', 0.0)
+            results['mrr_r5'] = torch.sum(1.0 / ranks_r5).item() + results.get('mrr_r5', 0.0)
+            results['mrr_r6'] = torch.sum(1.0 / ranks_r6).item() + results.get('mrr_r6', 0.0)
+
+        # for k in range(10):
+        #     results['hits@{}_r1'.format(k + 1)] = torch.numel(ranks_r1[ranks_r1 <= (k + 1)]) + results.get(
+        #         'hits@{}_r1'.format(k + 1), 0.0)
+        #     results['hits@{}_r2'.format(k + 1)] = torch.numel(ranks_r2[ranks_r2 <= (k + 1)]) + results.get(
+        #         'hits@{}_r2'.format(k + 1), 0.0)       
+        #     results['hits@{}_r3'.format(k + 1)] = torch.numel(ranks_r3[ranks_r3<= (k + 1)]) + results.get(
+        #         'hits@{}_r3'.format(k + 1), 0.0)
+        #     results['hits@{}_r4'.format(k + 1)] = torch.numel(ranks_r4[ranks_r4 <= (k + 1)]) + results.get(
+        #         'hits@{}_r4'.format(k + 1), 0.0)
+        #     results['hits@{}_r5'.format(k + 1)] = torch.numel(ranks_r5[ranks_r5 <= (k + 1)]) + results.get(
+        #         'hits@{}_r5'.format(k + 1), 0.0)
+        #     results['hits@{}_r6'.format(k + 1)] = torch.numel(ranks_r6[ranks_r6 <= (k + 1)]) + results.get(
+        #         'hits@{}_r6'.format(k + 1), 0.0)    
+
     def metrics_for_one_triple(self, results):
         label_1 = results['all_labels'][4].cpu().data.numpy()
         pred_1 = results['all_preds'][4].cpu().data.numpy()
@@ -658,6 +764,37 @@ class Runner(object):
         ax.set_ylabel('scores')
         ax.set_title("Sample scores of all objects given a subject and relation.")
         plt.savefig('plots/sample_scores.png')
+
+    def class_metrics_rel(self, results,relation):
+        all_preds = results['all_preds']
+        all_labels = results['all_labels']
+        all_rels = results['all_rels']
+        if relation != -1:
+            rel_idx = (all_rels==relation).nonzero(as_tuple=True)[0]
+            all_preds = all_preds[rel_idx,:]
+            all_labels = all_labels[rel_idx,:]
+            # print(f"Predictions of rel {self.id2rel[2]} = {pred_three}")
+        # 
+        # b_range2 = torch.arange(all_preds.size()[0], device=self.device)
+        # top_pred_idx = torch.argsort(all_preds, dim=1, descending=True)[b_range2,:]
+        # # print(f"Top pred index = {top_pred_idx}")
+        # # top_pred = torch.where(all_preds[b_range,top_pred_idx[b_range]]>0.5, 1, 0)
+        # top_pred = torch.zeros(all_preds.size()[0], top_pred_idx.size()[1])
+        # top_labels = torch.zeros(all_preds.size()[0], top_pred_idx.size()[1])
+        # for i in b_range2:
+        #     for idx,j in enumerate(top_pred_idx[i]):
+        #         top_pred[i,idx] = all_preds[i,j]
+        #         top_labels[i,idx] = all_labels[i,j]
+        top_pred = torch.flatten(all_preds).cpu().data.numpy()
+        top_labels = torch.flatten(all_labels).cpu().data.numpy()
+        fpr_rel, tpr_rel, thresholds = metrics.roc_curve(top_labels, top_pred)
+        roc_auc_rel = metrics.auc(fpr_rel, tpr_rel)
+        precision_rel,recall_rel,thresholds_pr_rel = metrics.precision_recall_curve(
+                                                            top_labels, top_pred)
+        auc_pr_rel = metrics.auc(recall_rel, precision_rel)
+        print(f"For {self.id2rel[relation]}, AUC_ROC={roc_auc_rel}, AUCPR={auc_pr_rel} ")
+        # return roc_auc_rel,auc_pr_rel
+                                
 
     def metrics_at_k(self, results,k,relation=-1):
         all_preds = results['all_preds']
@@ -760,6 +897,45 @@ class Runner(object):
         loss = np.mean(losses)
         # self.logger.info('[Epoch:{}]:  Training Loss:{:.4}\n'.format(epoch, loss))
         return loss
+
+    def plot_hpo_study(self, study):
+        complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
+        incomplete_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
+        # trials_df = study.trials_dataframe()
+        # trials_df.columns = trials_df.columns.str.replace("test","val")
+        # failed_lrs,failed_bs,failed_ls,failed_att,failed_init_dim,failed_out_dim = [],[],[],[],[],[]
+        # for trial in incomplete_trials:
+        #     failed_lrs.append(trial._user_attrs['lr'])
+        #     failed_bs.append(trial._user_attrs['batch_size'])
+        # print(f"failed_lrs = {failed_lrs}")
+        # print(f"failed_bs = {failed_bs}")
+
+        # trials_df['pruned_lrs'] = failed_lrs
+        # trials_df['pruned_bs'] = failed_bs
+        # trials_df['best_lr'] = study.best_trial._user_attrs['lr']
+        # trials_df['best_batch_size'] = study.best_trial._user_attrs['batch_size']
+        # trials_df.to_csv(r'trials/trials_df.csv',sep='\t')
+        print("  Number of complete trials: ", len(complete_trials))
+        print("Best trial: ")
+        trial = study.best_trial
+
+        print("  Value: ", trial.value)
+
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print("    {}: {}".format(key, value))
+        
+        fig = optuna.visualization.plot_optimization_history(study)
+        # fig2 = optuna.visualization.plot_contour(study, params=["batch_size", "lr",
+        #                                             "lbl_smooth","l2"])
+        fig3 = optuna.visualization.plot_slice(study, params=["batch_size", "lr",
+                                                    "lbl_smooth","l2","hid_drop","dropout"])
+        fig4 = optuna.visualization.plot_param_importances(study)
+        fig.write_image("plots/optuna/study_history_lblldh_p_rev.png")
+        # fig2.write_image("plots/optuna/study_contour2.png")
+        fig3.write_image("plots/optuna/parameter_slice_lblldh_p_rev.png")
+        fig4.write_image("plots//optuna/param_imp_lblldh_p_rev.png")
+        
 
     def fit(self,trial):
         """

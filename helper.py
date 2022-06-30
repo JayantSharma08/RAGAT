@@ -5,6 +5,7 @@ import numpy as np, sys, os, random, pdb, json, uuid, time, argparse
 from pprint import pprint
 import logging, logging.config
 from collections import defaultdict as ddict
+import pandas as pd
 from ordered_set import OrderedSet
 
 # PyTorch related imports
@@ -20,6 +21,7 @@ from optuna.trial import TrialState
 import seaborn as sns
 import networkx as nx
 from pyvis.network import Network
+# from torch_geometric.nn import GNNExplainer
 
 np.set_printoptions(precision=4)
 
@@ -76,6 +78,9 @@ def get_combined_results(left_results, right_results):
     count_r3 = float(left_results['count_r3'])
     count_r4 = float(left_results['count_r4'])
 
+    ranks = left_results['ranks'].cpu().numpy()
+    np.save('ranks100.npy', ranks[:100])
+
     results['mr_r1'] = round(left_results['mr_r1'] / count_r1, 5)
     results['mr_r2'] = round(left_results['mr_r2'] / count_r2, 5)
     results['mr_r3'] = round(left_results['mr_r3'] / count_r3, 5)
@@ -84,6 +89,13 @@ def get_combined_results(left_results, right_results):
     results['mrr_r2'] = round(left_results['mrr_r2'] / count_r2, 5)
     results['mrr_r3'] = round(left_results['mrr_r3'] / count_r3, 5)
     results['mrr_r4'] = round(left_results['mrr_r4'] / count_r4, 5)
+    # if results['mr_r5']:
+    # count_r5 = float(left_results['count_r5'])
+    # count_r6 = float(left_results['count_r6'])
+    # results['mr_r5'] = round(left_results['mr_r5'] / count_r5, 5)
+    # results['mr_r6'] = round(left_results['mr_r6'] / count_r6, 5)
+    # results['mrr_r5'] = round(left_results['mrr_r5'] / count_r5, 5)
+    # results['mrr_r6'] = round(left_results['mrr_r6'] / count_r6, 5)
 
     results['left_mr'] = round(left_results['mr'] / count, 5)
     results['left_mrr'] = round(left_results['mrr'] / count, 5)
@@ -93,6 +105,13 @@ def get_combined_results(left_results, right_results):
     results['mrr'] = round((left_results['mrr'] + right_results['mrr']) / (2 * count), 5)
 
     for k in range(10):
+        # results['hits@{}_r1'.format(k + 1)] = round(left_results['hits@{}_r1'.format(k + 1)] / count_r1, 5)
+        # results['hits@{}_r2'.format(k + 1)] = round(left_results['hits@{}_r2'.format(k + 1)] / count_r2, 5)
+        # results['hits@{}_r3'.format(k + 1)] = round(left_results['hits@{}_r3'.format(k + 1)] / count_r3, 5)
+        # results['hits@{}_r4'.format(k + 1)] = round(left_results['hits@{}_r4'.format(k + 1)] / count_r4, 5)
+        # results['hits@{}_r5'.format(k + 1)] = round(left_results['hits@{}_r5'.format(k + 1)] / count_r5, 5)
+        # results['hits@{}_r6'.format(k + 1)] = round(left_results['hits@{}_r6'.format(k + 1)] / count_r6, 5)
+
         results['left_hits@{}'.format(k + 1)] = round(left_results['hits@{}'.format(k + 1)] / count, 5)
         results['right_hits@{}'.format(k + 1)] = round(right_results['hits@{}'.format(k + 1)] / count, 5)
         results['hits@{}'.format(k + 1)] = round(
@@ -102,7 +121,7 @@ def get_combined_results(left_results, right_results):
 
 def get_param(shape):
     param = Parameter(torch.Tensor(*shape));
-    xavier_normal_(param.data)
+    xavier_normal_(param.data) #how is the initial embedding of the entities generated?
     return param
 
 

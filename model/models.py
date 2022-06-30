@@ -26,7 +26,7 @@ class RagatBase(BaseModel):
         self.edge_index = edge_index
         self.edge_type = edge_type
         self.p.gcn_dim = self.p.embed_dim if self.p.gcn_layer == 1 else self.p.gcn_dim
-        self.init_embed = get_param((self.p.num_ent, self.p.init_dim))
+        self.init_embed = get_param((self.p.num_ent, self.p.init_dim)) #intial embedding of entities
         self.device = self.edge_index.device
         self.nx_g=nx_g
 

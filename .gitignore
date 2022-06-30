@@ -531,3 +531,4 @@ sorted_preds.csv
 vars2.npy
 vars_for_plot.npy
 checkpoints/
+data/
